@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Machine Studio [MS]</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="styles.css" rel="stylesheet">
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════════
+     HEADER
+     - Load / Save / New always visible (Save is only meaningful
+       once a machine exists; it just downloads an empty machine
+       otherwise, which is harmless).
+═══════════════════════════════════════════════════════════ -->
+<header class="header">
+    <div class="logo">
+        <div class="logo-mark">MS</div>
+        <div>
+            <div class="logo-text">Machine Studio</div>
+            <div class="logo-sub">State machine simulator</div>
+        </div>
+    </div>
+
+    <span class="machine-pill" id="machineNamePill" style="display:none"></span>
+
+    <div class="header-actions">
+        <button class="btn btn-outline drawer-btn" id="drawerCatalog"
+                title="Show catalog">☰ Catalog</button>
+        <button class="btn btn-outline" onclick="main.newMachine()">+ New</button>
+        <button class="btn btn-outline" onclick="main.triggerUpload()">↑ Load</button>
+        <button class="btn btn-primary" onclick="main.downloadMachine()">↓ Save</button>
+        <button class="btn btn-outline" onclick="main.exportMachine()" title="Generate state machine code in your target language">⎘ Export</button>
+        <button class="btn btn-outline drawer-btn" id="drawerControls"
+                title="Show controls">Controls ☰</button>
+        <input type="file" id="fileInput" accept=".json" style="display:none">
+    </div>
+</header>
+
+<!-- ══════════════════════════════════════════════════════════
+     INTRO SCREEN — shown until a machine is loaded or created.
+═══════════════════════════════════════════════════════════ -->
+<div class="intro" id="introScreen">
+    <div class="intro-brand">Machine <span>Studio</span></div>
+    <div class="intro-tag">
+        Build and simulate state machines with a Petri-net token model.
+        Drag states. Click anything to edit. Press a trigger to advance the simulation.
+    </div>
+    <div class="intro-rule">
+        <span><span class="rule-num">01 —</span> Add states from the Catalog (left)</span>
+        <span><span class="rule-num">02 —</span> Connect them with transitions and logic gates</span>
+        <span><span class="rule-num">03 —</span> Add triggers (manual or timed) to fire transitions</span>
+        <span><span class="rule-num">04 —</span> Press <strong>Start Simulation</strong> to seed the start state</span>
+        <span><span class="rule-num">05 —</span> Watch tokens flow as triggers fire</span>
+    </div>
+    <div class="intro-btns">
+        <button class="btn btn-sec"     onclick="main.triggerUpload()">↑ Load Machine</button>
+        <button class="btn btn-primary" onclick="main.newMachine()">+ New Machine</button>
+    </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     STUDIO — three panes. Hidden until a machine is active.
+═══════════════════════════════════════════════════════════ -->
+<div class="studio" id="studio" style="display:none">
+
+    <!-- LEFT: Catalog -->
+    <aside class="panel-left">
+        <div class="panel-label">Catalog</div>
+        <div class="catalog-scroll" id="catalogList"></div>
+    </aside>
+
+    <!-- MIDDLE: Canvas -->
+    <section class="panel-mid">
+        <div class="canvas-toolbar">
+            <span class="mode-pill" id="modePill">Edit mode</span>
+            <span class="canvas-toolbar-spacer"></span>
+            <span style="font-size:0.65rem;color:var(--text-dim)">
+                Click a state, transition or gate to edit · Drag to rearrange
+            </span>
+        </div>
+        <div id="cyCanvas"></div>
+    </section>
+
+    <!-- RIGHT: Controls -->
+    <aside class="panel-right">
+        <div class="panel-label">Controls</div>
+        <div class="controls-scroll" id="controlsPane"></div>
+    </aside>
+
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     SCRIPTS — strict load order:
+       1.  lib/cytoscape.min.js     — diagram engine
+       2.  lib/dagre.min.js          — auto-layout math
+       3.  lib/cytoscape-dagre.js    — cytoscape ↔ dagre adapter
+       4.  config.js                 — global CONFIG
+       5.  fmt.js                    — small utilities
+       6.  modal.js                  — shared modal primitive
+       7.  machine.js                — Machine model + JSON I/O
+       8.  simulator.js              — Petri-net runtime
+       9.  canvas.js                 — Cytoscape integration
+       10. catalog.js                — left-pane buttons
+       11. controls.js               — right-pane triggers + globals
+       12. dialogs.js                — every modal
+       13. main.js                   — orchestrator
+═══════════════════════════════════════════════════════════ -->
+<script src="lib/cytoscape.min.js"></script>
+<script src="lib/dagre.min.js"></script>
+<script src="lib/cytoscape-dagre.js"></script>
+<script src="lib/jszip.min.js"></script>
+<script src="config.js"></script>
+<script src="fmt.js"></script>
+<script src="modal.js"></script>
+<script src="machine.js"></script>
+<script src="simulator.js"></script>
+<script src="canvas.js"></script>
+<script src="catalog.js"></script>
+<script src="controls.js"></script>
+<script src="generators/common/sanitize.js"></script>
+<script src="generators/common/emit.js"></script>
+<script src="generators/common/walker.js"></script>
+<script src="generators/c_lang.js"></script>
+<script src="generators/cpp_lang.js"></script>
+<script src="generators/index.js"></script>
+<script src="dialogs.js"></script>
+<script src="main.js"></script>
+
+<!-- Tiny script: keep the canvas-toolbar mode pill in sync. -->
+<script>
+(function () {
+    // The mode pill is updated by listening to controls.setMode via
+    // a small wrapper. We patch after main.init runs.
+    window.addEventListener('DOMContentLoaded', () => {
+        if (typeof controls === 'undefined') return;
+        const origSetMode = controls.setMode;
+        controls.setMode = function (m) {
+            origSetMode.call(controls, m);
+            const pill = document.getElementById('modePill');
+            if (!pill) return;
+            if (m === 'sim') { pill.textContent = 'Sim mode'; pill.classList.add('sim'); }
+            else             { pill.textContent = 'Edit mode'; pill.classList.remove('sim'); }
+        };
+    });
+})();
+</script>
+
+</body>
+</html>
