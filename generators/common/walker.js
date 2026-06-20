@@ -34,6 +34,7 @@ const walker = (() => {
         const ir = {
             name:        machine.name || 'Machine',
             cIdent:      sanitize.toIdent(machine.name || 'machine', 'machine'),
+            mode:        machine.mode === 'FSM' ? 'FSM' : 'PETRI',
             states:      [],
             triggers:    [],
             transitions: [],

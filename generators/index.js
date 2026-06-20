@@ -68,18 +68,24 @@ const generators = (() => {
         const safeName = String(basename || 'state_machine').replace(/[^A-Za-z0-9._-]+/g, '_');
 
         if (typeof JSZip === 'undefined') {
-            const concat = files.map(f =>
-                '/* ===== ' + f.name + ' =====\n   ' +
-                'JSZip not loaded — files concatenated into one. Split by these banners. */\n\n' +
-                f.content
-            ).join('\n\n');
+            // Binary entries (e.g. a PNG) can't be concatenated into text;
+            // note them so the user knows they were skipped in the fallback.
+            const concat = files.map(f => {
+                if (f.base64) {
+                    return '/* ===== ' + f.name + ' =====\n   ' +
+                           'Binary file omitted from the .txt fallback (JSZip not loaded). */';
+                }
+                return '/* ===== ' + f.name + ' =====\n   ' +
+                       'JSZip not loaded — files concatenated into one. Split by these banners. */\n\n' +
+                       f.content;
+            }).join('\n\n');
             _saveBlob(new Blob([concat], { type: 'text/plain' }), safeName + '.txt');
             return;
         }
 
         const zip = new JSZip();
         const folder = zip.folder(safeName);
-        files.forEach(f => folder.file(f.name, f.content));
+        files.forEach(f => folder.file(f.name, f.content, f.base64 ? { base64: true } : undefined));
         const blob = await zip.generateAsync({ type: 'blob' });
         _saveBlob(blob, safeName + '.zip');
     }

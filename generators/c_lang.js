@@ -30,6 +30,13 @@ const c_lang = (() => {
     /* ─── public entry ──────────────────────────────────────────── */
 
     function generate(ir, opts) {
+        // FSM formalism gets the dedicated finite-state-machine generator
+        // (a transition table + single current state), not the Petri
+        // token engine below.
+        if (ir.mode === 'FSM' && typeof c_fsm !== 'undefined') {
+            return c_fsm.generate(ir, opts);
+        }
+
         if (!SUPPORTED_PATTERNS.includes(opts.pattern)) {
             return { ok: false,
                 error: 'C generator does not support pattern "' + opts.pattern + '". ' +
@@ -47,6 +54,7 @@ const c_lang = (() => {
                                                      ? _emitSourceTable(ctx)
                                                      : _emitSourceSwitch(ctx) });
         files.push({ name: 'main.c',          content: _emitExampleMain(ctx) });
+        files.push({ name: 'test_state_machine.c', content: _emitTests(ctx) });
         files.push({ name: 'Makefile',        content: _emitMakefile(ctx) });
         files.push({ name: 'README.md',       content: _emitReadme(ctx) });
 
@@ -914,6 +922,50 @@ ${fireSequence}
     }
 
     /* ============================================================
+       TESTS (Unity) — Petri token model
+       ============================================================ */
+
+    function _emitTests(ctx) {
+        const ir = ctx.ir;
+        const start = ir.states.find(s => s.kind === 'start') || ir.states[0];
+        const totalInitial = ir.states.reduce((n, s) => n + (s.initialTokens || 0), 0);
+        const startInitial = start ? (start.initialTokens || 0) : 0;
+
+        const cases = [];
+
+        cases.push({
+            name: 'test_init_seeds_total_tokens',
+            body: 'TEST_ASSERT_EQUAL_INT(' + totalInitial + ', sm_total_tokens());' +
+                  '   /* sum of every state\'s initial_tokens */'
+        });
+        if (start) {
+            cases.push({
+                name: 'test_init_seeds_start_state',
+                body: 'TEST_ASSERT_EQUAL_INT(' + startInitial + ', sm_tokens_in(' + start.enumName + '));'
+            });
+        }
+        // Token flow depends on capacities, costs and gates, which are
+        // intricate to assert generically — leave a worked scaffold.
+        cases.push({
+            name: 'test_TODO_token_flow',
+            body:
+`/* Fire triggers and assert the resulting marking. Net token change for
+   a plain transition firing out of state F is (outputYield(F) - inputCost(F)).
+   Example:
+       sm_fire(TRIG_SOMETHING);
+       TEST_ASSERT_EQUAL_INT(<expected>, sm_tokens_in(S_DEST)); */
+TEST_ASSERT_EQUAL_INT(${totalInitial}, sm_total_tokens());`
+        });
+
+        return gen_tests.unity({
+            title: ir.name,
+            header: 'state_machine.h',
+            stubs: ir.states.map(s => s.handlerName),
+            cases
+        });
+    }
+
+    /* ============================================================
        Makefile + README
        ============================================================ */
 
@@ -923,16 +975,26 @@ CC      = gcc
 CFLAGS  = -Wall -Wextra -std=c99 -O2
 TARGET  = state_machine
 
+# Unity test framework location (folder holding unity.c / unity.h).
+# Drop Unity beside these files, or point UNITY_DIR at your checkout's src/.
+UNITY_DIR ?= .
+UNITY_SRC  = $(UNITY_DIR)/unity.c
+
 $(TARGET): state_machine.c main.c state_machine.h
 \t$(CC) $(CFLAGS) -o $@ state_machine.c main.c
 
 run: $(TARGET)
 \t./$(TARGET)
 
-clean:
-\trm -f $(TARGET)
+# Build + run the Unity test suite (does NOT link main.c).
+test: state_machine.c test_state_machine.c $(UNITY_SRC)
+\t$(CC) $(CFLAGS) -I$(UNITY_DIR) -o run_tests state_machine.c test_state_machine.c $(UNITY_SRC)
+\t./run_tests
 
-.PHONY: run clean
+clean:
+\trm -f $(TARGET) run_tests
+
+.PHONY: run test clean
 `;
     }
 
@@ -959,7 +1021,8 @@ Pattern: **${ctx.opts.pattern}** — ${_patternBlurb(ctx.opts.pattern)}.
 | \`state_machine.h\` | Public API: state enum, accessors, trigger constants & functions |
 | \`state_machine.c\` | Firing engine, state attributes, ${ctx.hasGates ? 'gate logic, ' : ''}two-phase step semantics |
 | \`main.c\` | Example driver with stub state handlers |
-| \`Makefile\` | Build target |
+| \`test_state_machine.c\` | Unity test template (token-seeding checks + scaffold) |
+| \`Makefile\` | Build, \`run\` and \`test\` targets |
 
 ## Build & run
 
@@ -967,6 +1030,13 @@ Pattern: **${ctx.opts.pattern}** — ${_patternBlurb(ctx.opts.pattern)}.
 make
 make run
 \`\`\`
+
+## Tests (Unity)
+
+\`test_state_machine.c\` is a [Unity](https://github.com/ThrowTheSwitch/Unity)
+template. Put \`unity.c\` / \`unity.h\` beside these files (or set \`UNITY_DIR\`),
+then run \`make test\`. The generated cases verify \`sm_init()\` seeds the
+marking from each state's initial tokens; extend with your own flow checks.
 
 ## API at a glance
 

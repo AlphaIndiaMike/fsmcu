@@ -3,17 +3,23 @@
  * Machine Studio [MS] — Application orchestrator.
  *
  * Wires Machine, simulator, canvas, catalog, controls and dialogs.
- * Owns the single render cycle, the edit↔sim mode flag, file I/O
- * and the responsive drawer behaviour. Exposes a small `main`
- * surface to the HTML onclick attributes.
+ * Owns the single render cycle, the edit↔sim interaction flag, the
+ * FSM↔Petri formalism toggle, file I/O, the unsaved-changes guard and
+ * the responsive drawer behaviour. Exposes a small `main` surface to
+ * the HTML onclick attributes.
+ *
+ * Two orthogonal "modes" live here, kept deliberately distinct:
+ *   · interaction mode — 'edit' | 'sim'  (local `mode` variable)
+ *   · formalism        — 'FSM' | 'PETRI' (stored on machine.mode)
  *
  * Depends on: every other JS module in this folder.
  */
 
 const main = (() => {
 
-    let machine = null;
-    let mode    = 'edit';     // 'edit' | 'sim'
+    let machine  = null;
+    let mode     = 'edit';     // interaction: 'edit' | 'sim'
+    let _unsaved = false;      // model changed since last save / load / new
 
     /* ── init ─────────────────────────────────────────────────────── */
 
@@ -23,11 +29,12 @@ const main = (() => {
             onStateClick:      _onStateClick,
             onGateClick:       _onGateClick,
             onTransitionClick: _onTransitionClick,
+            onGroupClick:      _onGroupClick,
             onPositionChange:  _onPositionChange
         });
 
-        // Catalog (left pane)
-        catalog.render('catalogList', _onCatalogPick);
+        // Catalog (left pane) — starts in Petri (the constructor default).
+        catalog.render('catalogList', _onCatalogPick, 'PETRI');
 
         // Controls (right pane)
         controls.init('controlsPane', {
@@ -49,29 +56,53 @@ const main = (() => {
             onSimMessage:   msg      => controls.setMessage(msg)
         });
 
-        // Dialogs (model mutators)
+        // Dialogs (model mutators). Every mutator marks the model dirty.
         dialogs.init({
             getMachine:              () => machine,
+            getDiagramImage:         () => canvas.exportPngBase64({ scale: 2 }),
             applyStateUpdate:        _applyStateUpdate,
             applyStateDelete:        _applyStateDelete,
-            applyTransitionUpdate:   (id, p) => { machine.updateTransition(id, p); _refresh(); },
-            applyTransitionCreate:   (data)  => { machine.addTransition(data);     _refresh(); },
-            applyTransitionDelete:   (id)    => { machine.deleteTransition(id);    _refresh(); },
-            applyGateUpdate:         (id, p) => { machine.updateGate(id, p);       _refresh(); },
-            applyGateCreate:         (data)  => { machine.addGate(data);           _refresh(); },
-            applyGateDelete:         (id)    => { machine.deleteGate(id);          _refresh(); },
-            applyTriggerUpdate:      (id, p) => { machine.updateTrigger(id, p);    _refresh(); },
-            applyTriggerCreate:      (data)  => { machine.addTrigger(data);        _refresh(); },
-            applyTriggerDelete:      (id)    => { machine.deleteTrigger(id);       _refresh(); }
+            applyTransitionUpdate:   (id, p) => { machine.updateTransition(id, p); _changed(); },
+            applyTransitionCreate:   (data)  => { machine.addTransition(data);     _changed(); },
+            applyTransitionDelete:   (id)    => { machine.deleteTransition(id);    _changed(); },
+            applyGateUpdate:         (id, p) => { machine.updateGate(id, p);       _changed(); },
+            applyGateCreate:         (data)  => { machine.addGate(data);           _changed(); },
+            applyGateDelete:         (id)    => { machine.deleteGate(id);          _changed(); },
+            applyGroupCreate:        _applyGroupCreate,
+            applyGroupUpdate:        _applyGroupUpdate,
+            applyGroupDelete:        (id)    => { machine.deleteGroup(id);         _changed(); },
+            applyTriggerUpdate:      (id, p) => { machine.updateTrigger(id, p);    _changed(); },
+            applyTriggerCreate:      (data)  => { machine.addTrigger(data);        _changed(); },
+            applyTriggerDelete:      (id)    => { machine.deleteTrigger(id);       _changed(); }
         });
 
         _bindEvents();
+        _bindModeToggle();
+        _showVersion();
         _showIntro();
+
+        // Guard against losing work on refresh / close. The browser shows
+        // its own confirmation when we set returnValue; we only arm it
+        // while there are unsaved changes, so a clean (just-saved) machine
+        // closes without nagging.
+        window.addEventListener('beforeunload', e => {
+            if (!_unsaved) return;
+            e.preventDefault();
+            e.returnValue = '';   // required for the prompt to show in Chrome
+            return '';
+        });
     }
 
     function _bindEvents() {
         document.getElementById('fileInput')
             .addEventListener('change', _handleUpload);
+
+        // Click the header name pill to rename the machine.
+        const pill = document.getElementById('machineNamePill');
+        if (pill) pill.addEventListener('click', e => {
+            e.stopPropagation();
+            _renameProject();
+        });
 
         // Responsive drawers (collapse below 1000px)
         const lT = document.getElementById('drawerCatalog');
@@ -99,6 +130,73 @@ const main = (() => {
         });
     }
 
+    /* ── FSM / Petri formalism toggle (header) ───────────────────────── */
+
+    function _bindModeToggle() {
+        document.querySelectorAll('.mode-btn').forEach(b => {
+            b.addEventListener('click', () => {
+                if (b.classList.contains('disabled')) return;  // no machine yet
+                _setFormalism(b.getAttribute('data-appmode'));
+            });
+        });
+        _setModeButtonsEnabled(false);   // disabled until a machine exists
+    }
+
+    /* Enable/disable the FSM/Petri toggle. Before a machine exists there
+       is nothing to switch, so the buttons are disabled with a tooltip. */
+    function _setModeButtonsEnabled(on) {
+        document.querySelectorAll('.mode-btn').forEach(b => {
+            b.classList.toggle('disabled', !on);
+            if (on) {
+                b.title = b.getAttribute('data-tip') || '';
+            } else {
+                if (!b.getAttribute('data-tip')) b.setAttribute('data-tip', b.title);
+                b.title = 'Start or open a machine first to choose a formalism.';
+            }
+        });
+    }
+
+    /* Switch the whole studio between FSM and Petri. The two models are
+       independent — switching never migrates data, it just shows the
+       other model and its tooling. Any running simulation is stopped
+       first (you cannot simulate across a model switch). */
+    function _setFormalism(target) {
+        if (!machine) return;
+        const want = (target === 'FSM') ? 'FSM' : 'PETRI';
+        if (want === machine.mode) return;
+        if (mode === 'sim') _stopSim();
+        machine.setMode(want);
+        _unsaved = true;             // the saved `mode` field now differs
+        _syncFormalismUI(machine.mode);
+        canvas.resetVisuals();
+        _refresh();
+        // If the model we just switched to has never been positioned
+        // (e.g. the demo's other formalism, or a freshly emptied model),
+        // arrange it once so nodes don't stack at the origin.
+        const anyPositioned = machine.states.some(s => s.x || s.y);
+        if (!anyPositioned && machine.states.length > 0) {
+            setTimeout(() => { canvas.autoLayout(); }, 60);
+        } else {
+            setTimeout(() => { canvas.fit(); }, 60);
+        }
+    }
+
+    /* Push the current formalism into the header toggle and the catalog.
+       Used by the toggle and on machine load. */
+    function _syncFormalismUI(m) {
+        const cur = (m === 'FSM') ? 'FSM' : 'PETRI';
+        document.querySelectorAll('.mode-btn').forEach(b =>
+            b.classList.toggle('on', b.getAttribute('data-appmode') === cur));
+        catalog.setMode(cur);
+    }
+
+    /* Stamp the tool version into the header badge. Sourced from CONFIG
+       so the single bump per iteration propagates everywhere. */
+    function _showVersion() {
+        const el = document.getElementById('appVersion');
+        if (el) el.textContent = 'v' + (CONFIG.appVersion || '?');
+    }
+
     /* ── intro / studio screens ───────────────────────────────────── */
 
     function _showIntro() {
@@ -122,15 +220,38 @@ const main = (() => {
         _updateHeaderName();
     }
 
+    /* A model edit happened: mark dirty and re-render. */
+    function _changed() {
+        _unsaved = true;
+        _refresh();
+    }
+
     function _updateHeaderName() {
         const el = document.getElementById('machineNamePill');
         if (!el) return;
-        if (machine && machine.name) {
-            el.textContent     = machine.name;
-            el.style.display   = '';
+        if (machine) {
+            // Always show the pill while a machine is active. An untitled
+            // machine reads "Untitled — click to name" so the rename
+            // affordance is discoverable.
+            const named = machine.name && machine.name.trim();
+            el.textContent   = named ? machine.name : 'Untitled — click to name';
+            el.classList.toggle('is-untitled', !named);
+            el.title         = 'Click to rename this machine';
+            el.style.display = '';
         } else {
             el.style.display = 'none';
         }
+    }
+
+    /* Rename the active machine. The name is the user's to decide; it
+       drives the header label and the JSON download filename. */
+    function _renameProject() {
+        if (!machine) return;
+        dialogs.openRename(machine.name || '', (name) => {
+            machine.name = (name || '').trim();
+            _updateHeaderName();
+            _unsaved = true;
+        });
     }
 
     /* ── catalog handlers ─────────────────────────────────────────── */
@@ -143,6 +264,9 @@ const main = (() => {
                 break;
             case 'transition':
                 dialogs.openTransitionEdit(null);
+                break;
+            case 'group':
+                dialogs.openGroupEdit(null);
                 break;
             case 'trigger-manual':
                 dialogs.openTriggerEdit(null, 'manual');
@@ -163,7 +287,7 @@ const main = (() => {
         // If no start exists yet, this one becomes start.
         const kind = machine.startState() ? 'normal' : 'start';
         const s = machine.addState({ kind });
-        _refresh();
+        _changed();
         // Open the edit dialog so the user can rename / tune props.
         dialogs.openStateEdit(s.id);
     }
@@ -173,12 +297,16 @@ const main = (() => {
     function _onStateClick(id)      { if (mode === 'edit') dialogs.openStateEdit(id); }
     function _onGateClick(id)       { if (mode === 'edit') dialogs.openGateEdit(id, null); }
     function _onTransitionClick(id) { if (mode === 'edit') dialogs.openTransitionEdit(id); }
+    function _onGroupClick(id)      { if (mode === 'edit') dialogs.openGroupEdit(id); }
 
     function _onPositionChange(kind, id, x, y) {
         if (!machine) return;
         if (kind === 'state') machine.updateState(id, { x, y });
         if (kind === 'gate')  machine.updateGate(id,  { x, y });
-        // No re-render needed — the visual is already at the new spot.
+        if (kind === 'group') machine.updateGroup(id, { x, y });
+        // Moving things is unsaved work worth guarding, but it doesn't
+        // change topology so no re-render is needed.
+        _unsaved = true;
     }
 
     /* ── trigger handlers ─────────────────────────────────────────── */
@@ -201,18 +329,32 @@ const main = (() => {
         if (!t) return;
         dialogs.confirm('Delete trigger?',
             'Remove "' + t.name + '". Arrows/gates referencing it lose their trigger.',
-            () => { machine.deleteTrigger(triggerId); _refresh(); });
+            () => { machine.deleteTrigger(triggerId); _changed(); });
     }
 
     /* ── state mutations (dialog → here) ──────────────────────────── */
 
     function _applyStateUpdate(id, patch) {
         machine.updateState(id, patch);
-        _refresh();
+        _changed();
     }
     function _applyStateDelete(id) {
         machine.deleteState(id);
-        _refresh();
+        _changed();
+    }
+
+    /* ── group mutations ──────────────────────────────────────────── */
+
+    function _applyGroupCreate(patch, members) {
+        const g = machine.addGroup(patch);
+        if (members) machine.setGroupMembers(g.id, members);
+        _changed();
+        return g.id;
+    }
+    function _applyGroupUpdate(id, patch, members) {
+        machine.updateGroup(id, patch);
+        if (members) machine.setGroupMembers(id, members);
+        _changed();
     }
 
     /* ── simulation lifecycle ─────────────────────────────────────── */
@@ -229,8 +371,8 @@ const main = (() => {
         canvas.setEditMode(false);
         catalog.setEnabled(false);
         controls.setMode('sim');
-        // Render BEFORE seeding: canvas.render() builds fresh nodes
-        // with st-idle classes, which would otherwise wipe the colours
+        // Render BEFORE seeding: canvas.render() builds fresh nodes with
+        // st-idle classes, which would otherwise wipe the colours
         // simulator.startSim emits via onStatusChange.
         _refresh();
         simulator.startSim(machine);
@@ -255,27 +397,43 @@ const main = (() => {
     /* ── file I/O ─────────────────────────────────────────────────── */
 
     function newMachine() {
-        // Guard against accidental clicks when there's unsaved work.
+        // Guard against accidental clicks when there's unsaved work in
+        // EITHER sub-model.
         const hasContent = machine &&
-            (machine.states.length   > 0 ||
-             machine.triggers.length > 0);
+            (machine._models.FSM.states.length    > 0 ||
+             machine._models.FSM.triggers.length  > 0 ||
+             machine._models.PETRI.states.length  > 0 ||
+             machine._models.PETRI.triggers.length > 0);
 
         if (hasContent) {
             dialogs.confirm('Discard current machine?',
                 'You\'ll lose any unsaved changes to "' +
                 (machine.name || 'this machine') +
                 '". Use Save first if you want to keep it.',
-                () => dialogs.openNewMachine(_proceedNewMachine));
+                () => dialogs.openNewMachine(_proceedNewMachine, _proceedDemo));
             return;
         }
-        dialogs.openNewMachine(_proceedNewMachine);
+        dialogs.openNewMachine(_proceedNewMachine, _proceedDemo);
     }
 
-    function _proceedNewMachine(name) {
+    function _proceedNewMachine(name, formalism) {
         // Reset uid counters so a fresh machine restarts at s_1, t_1...
         fmt.resetUid();
-        machine = new Machine(name || '');
+        machine = new Machine(name || '', formalism === 'FSM' ? 'FSM' : 'PETRI');
         _activate();
+    }
+
+    /* Demo: build BOTH a Petri net and an FSM in one machine (no
+       formalism question) so the user can switch from the header and
+       compare the two formalisms side by side. Opens in Petri — the
+       primary formalism. */
+    function _proceedDemo() {
+        fmt.resetUid();
+        machine = (typeof demo !== 'undefined' && demo.build)
+            ? demo.build() : new Machine('', 'PETRI');
+        // The reference seeds nodes at default spots, so force one
+        // auto-arrange on load. A loaded user file keeps its positions.
+        _activate(true);
     }
 
     function exportMachine() {
@@ -293,6 +451,7 @@ const main = (() => {
         a.download = (machine.name || 'machine').replace(/\s+/g, '_') + '.json';
         a.click();
         URL.revokeObjectURL(url);
+        _unsaved = false;   // work has been saved to a file
     }
 
     function triggerUpload() {
@@ -315,18 +474,21 @@ const main = (() => {
         event.target.value = '';
     }
 
-    function _activate() {
+    function _activate(forceLayout) {
         _showStudio();
         mode = 'edit';
+        _unsaved = false;          // freshly created or loaded
         canvas.setEditMode(true);
         catalog.setEnabled(true);
+        _setModeButtonsEnabled(true);
+        _syncFormalismUI(machine.mode);   // reflect loaded formalism
         controls.setMode('edit');
         controls.setMessage('');
         _refresh();
-        // Fit & auto-layout if positions are all zero (fresh load with
-        // no positions set).
+        // Fit & auto-layout if positions are all zero (fresh load with no
+        // positions set) or the demo forced it.
         const anyPositioned = machine.states.some(s => s.x || s.y);
-        if (!anyPositioned && machine.states.length > 0) {
+        if (forceLayout || (!anyPositioned && machine.states.length > 0)) {
             setTimeout(() => { canvas.autoLayout(); }, 60);
         } else {
             setTimeout(() => { canvas.fit(); }, 60);
@@ -335,7 +497,12 @@ const main = (() => {
 
     return {
         init,
-        newMachine, downloadMachine, triggerUpload, exportMachine
+        newMachine, downloadMachine, triggerUpload, exportMachine,
+        loadDemo: _proceedDemo,
+        renameProject: _renameProject,
+        // Small test/debug surface (mirrors FAS): drive a catalog pick or
+        // read the live machine from outside.
+        getMachine: () => machine
     };
 })();
 

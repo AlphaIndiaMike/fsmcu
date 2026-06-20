@@ -55,6 +55,30 @@ const canvas = (() => {
             boxSelectionEnabled: false,
             selectionType: 'single',
             style: [
+                /* ── Group compound (parent) nodes ─────────────── */
+                {
+                    selector: 'node[type="group"]',
+                    style: {
+                        'shape':                'round-rectangle',
+                        'background-color':     'data(color)',
+                        'background-opacity':   0.10,
+                        'border-color':         'data(color)',
+                        'border-width':         1.5,
+                        'border-style':         'dashed',
+                        'label':                'data(label)',
+                        'text-valign':          'top',
+                        'text-halign':          'center',
+                        'text-margin-y':        -6,
+                        'font-family':          'Outfit, sans-serif',
+                        'font-size':            10,
+                        'font-weight':          700,
+                        'color':                'data(color)',
+                        'letter-spacing':       1.1,
+                        'text-transform':       'uppercase',
+                        'padding':              '16px',
+                        'compound-sizing-wrt-labels': 'include'
+                    }
+                },
                 /* ── State nodes (default softbox, idle/grey) ──── */
                 {
                     selector: 'node[type="state"]',
@@ -197,6 +221,7 @@ const canvas = (() => {
             const t = n.data('type');
             if (t === 'state' && api.onStateClick) api.onStateClick(n.id());
             if (t === 'gate'  && api.onGateClick)  api.onGateClick(n.id());
+            if (t === 'group' && api.onGroupClick) api.onGroupClick(n.id());
         });
 
         cy.on('tap', 'edge', evt => {
@@ -215,6 +240,16 @@ const canvas = (() => {
             const t  = n.data('type');
             const p  = n.position();
             if (api.onPositionChange) api.onPositionChange(t, n.id(), p.x, p.y);
+            // Dragging a group (a compound node) moves its child states
+            // too, but cytoscape only fires dragfree on the dragged
+            // parent — so persist each child's new absolute position as
+            // well, otherwise a re-render would snap them back.
+            if (t === 'group' && api.onPositionChange) {
+                n.children().forEach(ch => {
+                    const cp = ch.position();
+                    api.onPositionChange(ch.data('type'), ch.id(), cp.x, cp.y);
+                });
+            }
         });
 
         // Resize handling: when the middle pane changes size (window
@@ -239,17 +274,38 @@ const canvas = (() => {
     function _machineToElements(machine) {
         const els = [];
 
-        machine.states.forEach((s, i) => {
-            const pos = (s.x || s.y) ? { x: s.x, y: s.y }
-                                     : _gridSpot(i);
+        // Groups first — cytoscape needs a parent node present before any
+        // child references it. A group is a compound node; its position
+        // and size derive from the states inside it.
+        (machine.groups || []).forEach(gr => {
             els.push({
                 group: 'nodes',
                 data: {
-                    id:    s.id,
-                    type:  'state',
-                    kind:  s.kind,
-                    label: _stateLabel(s, 0)
+                    id:    gr.id,
+                    type:  'group',
+                    label: gr.name,
+                    color: gr.color
                 },
+                selectable: true
+            });
+        });
+
+        machine.states.forEach((s, i) => {
+            const pos = (s.x || s.y) ? { x: s.x, y: s.y }
+                                     : _gridSpot(i);
+            const data = {
+                id:    s.id,
+                type:  'state',
+                kind:  s.kind,
+                label: _stateLabel(machine, s, 0)
+            };
+            // Place the state inside its group, if it has a live one.
+            if (s.groupId && machine.groupById(s.groupId)) {
+                data.parent = s.groupId;
+            }
+            els.push({
+                group: 'nodes',
+                data,
                 position: pos,
                 classes:  'st-idle'
             });
@@ -340,7 +396,10 @@ const canvas = (() => {
         return els;
     }
 
-    function _stateLabel(state, tokens) {
+    function _stateLabel(machine, state, tokens) {
+        // FSM states are just named — a finite-state machine has no
+        // token/capacity bracket; the colour shows which state is active.
+        if (machine && machine.mode === 'FSM') return state.name;
         return state.name + '\n[' + tokens + '/' + state.bufferCap + ']';
     }
 
@@ -367,7 +426,7 @@ const canvas = (() => {
             if (!n || n.length === 0) return;
             const s = lastMachine.stateById(id);
             if (!s) return;
-            n.data('label', _stateLabel(s, tokens));
+            n.data('label', _stateLabel(lastMachine, s, tokens));
             n.removeClass('st-idle st-active st-full st-fail');
             n.addClass('st-' + status);
         });
@@ -379,7 +438,7 @@ const canvas = (() => {
         cy.nodes('[type="state"]').forEach(n => {
             const s = lastMachine.stateById(n.id());
             if (!s) return;
-            n.data('label', _stateLabel(s, 0));
+            n.data('label', _stateLabel(lastMachine, s, 0));
             n.removeClass('st-active st-full st-fail');
             n.addClass('st-idle');
         });
@@ -437,8 +496,36 @@ const canvas = (() => {
         cy.fit(undefined, 40);
     }
 
+    /* ── Diagram image export ─────────────────────────────────────────
+       Render the WHOLE graph (not just the viewport) to a PNG. Two
+       forms: raw base64 for stuffing into a zip via JSZip, and a
+       data-URI for a direct <a download>. White background so the image
+       embeds cleanly anywhere. */
+    function exportPngBase64(opts) {
+        if (!cy) return null;
+        opts = opts || {};
+        return cy.png({
+            output: 'base64',
+            full:   true,
+            scale:  opts.scale || 2,
+            bg:     opts.bg || '#ffffff'
+        });
+    }
+
+    function exportPngUri(opts) {
+        if (!cy) return null;
+        opts = opts || {};
+        return cy.png({
+            output: 'base64uri',
+            full:   true,
+            scale:  opts.scale || 2,
+            bg:     opts.bg || '#ffffff'
+        });
+    }
+
     return {
         init, render, applyStatuses, resetVisuals,
-        setEditMode, autoLayout, fit
+        setEditMode, autoLayout, fit,
+        exportPngBase64, exportPngUri
     };
 })();

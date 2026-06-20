@@ -55,7 +55,7 @@ const simulator = (() => {
         _stopAllTimers();
         _seedMarking();
         _emitStatus();
-        _emitMessage('Running — initial tokens placed. Fire a trigger to advance.');
+        _emitMessage(_seedMessage('Running'));
     }
 
     function resetSim() {
@@ -65,7 +65,14 @@ const simulator = (() => {
         ended = false;
         _seedMarking();
         _emitStatus();
-        _emitMessage('Reset — initial tokens placed. Fire a trigger to advance.');
+        _emitMessage(_seedMessage('Reset'));
+    }
+
+    /* Seed-status line, worded for the active formalism. */
+    function _seedMessage(prefix) {
+        return (machine && machine.mode === 'FSM')
+            ? prefix + ' — start state is active. Fire a trigger to advance.'
+            : prefix + ' — initial tokens placed. Fire a trigger to advance.';
     }
 
     /* Place each state's configured initialTokens onto the marking.
@@ -74,6 +81,15 @@ const simulator = (() => {
     function _seedMarking() {
         marking.clear();
         if (!machine) return;
+        // FSM: a single active state. The start state holds the one
+        // active marker; every other state is idle. (initialTokens is a
+        // Petri concept and is intentionally ignored here.)
+        if (machine.mode === 'FSM') {
+            machine.states.forEach(s => marking.set(s.id, 0));
+            const start = machine.startState();
+            if (start) marking.set(start.id, 1);
+            return;
+        }
         machine.states.forEach(s => {
             const n = Math.max(0, Math.min(s.initialTokens || 0, s.bufferCap));
             marking.set(s.id, n);
@@ -102,6 +118,9 @@ const simulator = (() => {
         const s = machine && machine.stateById(stateId);
         if (!s) return 'idle';
         const n = marking.get(stateId) || 0;
+        // FSM: the single occupied state is simply "active" (green).
+        // There is no buffer-full notion in a finite-state machine.
+        if (machine.mode === 'FSM') return n > 0 ? 'active' : 'idle';
         if (n === 0)            return 'idle';
         if (n >= s.bufferCap)   return 'full';
         return 'active';
@@ -130,6 +149,11 @@ const simulator = (() => {
     function fireTrigger(triggerId) {
         if (!running || ended || !machine) return;
 
+        // FSM mode: classic single-active-state semantics, handled
+        // entirely by its own path. The Petri step logic below is left
+        // exactly as it was.
+        if (machine.mode === 'FSM') { _fireTriggerFSM(triggerId); return; }
+
         const snap = new Map(marking);
 
         // Phase 1 — classify against snapshot.
@@ -155,6 +179,54 @@ const simulator = (() => {
 
         _checkAutoStop();
         _emitStatus();
+    }
+
+    /* ── FSM firing ───────────────────────────────────────────────────
+       Classic finite-state-machine semantics: there is exactly ONE
+       active state. Firing a trigger moves the active state along the
+       first transition out of it that carries this trigger. A trigger
+       with no matching transition from the current state flashes the
+       active state (visual "that input does nothing here") and changes
+       nothing. End states auto-stop the run, same as Petri. */
+    function _fireTriggerFSM(triggerId) {
+        const cur = _activeState();
+        if (!cur) return;
+
+        // Transitions leaving the active state that carry this trigger.
+        const outs = machine.transitions.filter(
+            t => t.from === cur.id && t.triggerId === triggerId
+        );
+
+        if (outs.length === 0) {
+            // This input is not wired out of the current state — give
+            // the user feedback that nothing happened, then bail.
+            _flashFailQuiet(cur.id);
+            _emitStatus();
+            return;
+        }
+
+        // First match wins. A well-formed FSM is deterministic; if the
+        // user wired two transitions on the same trigger out of one
+        // state the machine is non-deterministic, and we resolve the
+        // conflict by creation order (the first transition listed).
+        const dst = machine.stateById(outs[0].to);
+        if (!dst) { _emitStatus(); return; }
+
+        marking.set(cur.id, 0);
+        marking.set(dst.id, 1);
+
+        _checkAutoStop();
+        _emitStatus();
+    }
+
+    /* The single active state in FSM mode (the one holding the marker).
+       Returns null if the marking is empty (shouldn't happen post-seed). */
+    function _activeState() {
+        if (!machine) return null;
+        for (const s of machine.states) {
+            if ((marking.get(s.id) || 0) > 0) return s;
+        }
+        return null;
     }
 
     /* ── Classifiers (read-only, against snapshot) ────────────────── */

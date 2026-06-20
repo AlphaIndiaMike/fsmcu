@@ -126,7 +126,15 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
+.machine-pill:hover {
+    background: rgba(255,255,255,0.14);
+    border-color: rgba(255,255,255,0.28);
+    color: #e4e7ec;
+}
+.machine-pill.is-untitled { color: #8b93a4; }
 
 .header-actions { display: flex; gap: 0.4rem; align-items: center; }
 
@@ -594,6 +602,10 @@ body {
     padding: 0.2rem 0;
 }
 
+.dlg-checks {
+    display: flex; flex-direction: column; gap: 0.4rem;
+    margin-top: 0.5rem;
+}
 .dlg-check {
     display: flex; align-items: center; gap: 0.5rem;
     padding: 0.4rem 0.55rem;
@@ -604,6 +616,7 @@ body {
     cursor: pointer;
 }
 .dlg-check input { cursor: pointer; }
+.dlg-check em { font-style: normal; color: var(--text-mid); }
 
 /* ── Gate input picker ──────────────────────────────────────────── */
 .gate-inputs {
@@ -660,3 +673,99 @@ body {
         background: rgba(0,0,0,0.25); z-index: 400;
     }
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   v1.0.0 additions — version badge, FSM/Petri formalism toggle,
+   group colour swatches, member-picker kind tag, left-aligned footer
+   button. Adapted from the FAS toggle language into the MS slate
+   theme (the accent is slate-grey, the header is dark).
+═══════════════════════════════════════════════════════════════════ */
+
+/* Version badge — sits in the dark header next to the brand. */
+.logo-ver {
+    align-self: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.56rem;
+    letter-spacing: 0.04em;
+    color: #aab2c0;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.16);
+    border-radius: 3px;
+    padding: 0.1rem 0.34rem;
+    margin-left: 0.1rem;
+    white-space: nowrap;
+}
+.logo-ver:empty { display: none; }
+
+/* FSM / Petri formalism toggle — same pill language as the rest of the
+   chrome, tuned to read on the dark header. */
+.mode-toggle {
+    display: inline-flex;
+    margin-left: 0.45rem;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.16);
+    border-radius: 4px;
+    padding: 2px;
+    overflow: hidden;
+}
+.mode-btn {
+    background: transparent;
+    border: none;
+    padding: 0.3rem 0.72rem;
+    font-family: 'Outfit', sans-serif;
+    font-size: 0.64rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #aab2c0;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: all 0.12s;
+    white-space: nowrap;
+}
+.mode-btn:hover { color: #fff; }
+.mode-btn.on {
+    background: var(--accent-light);
+    color: var(--accent);
+}
+.mode-btn.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    color: #aab2c0;
+}
+.mode-btn.disabled:hover { color: #aab2c0; }
+
+/* Group colour swatches (group dialog). */
+.dlg-swatches {
+    display: flex; flex-wrap: wrap; gap: 0.4rem;
+    margin-bottom: 0.7rem;
+}
+.dlg-swatch {
+    position: relative;
+    width: 26px; height: 26px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 2px solid transparent;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.12);
+    transition: transform 0.1s, border-color 0.1s;
+}
+.dlg-swatch:hover { transform: scale(1.08); }
+.dlg-swatch input { position: absolute; opacity: 0; inset: 0; cursor: pointer; margin: 0; }
+.dlg-swatch-on {
+    border-color: var(--text);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.75), 0 0 0 2px var(--border-focus);
+}
+
+/* Small spacing variant for a label that follows a block. */
+.dlg-label--gap { margin-top: 0.5rem; }
+
+/* The kind tag (start / normal / end) in the group member picker. */
+.gi-kind {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--text-dim);
+    margin-left: 0.3rem;
+}
+
+/* Footer button pushed to the left edge (e.g. "Load demo"). */
+.btn-left { margin-right: auto; }

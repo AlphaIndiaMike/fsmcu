@@ -22,6 +22,13 @@
             <div class="logo-text">Machine Studio</div>
             <div class="logo-sub">State machine simulator</div>
         </div>
+        <span class="logo-ver" id="appVersion" title="Tool version"></span>
+        <div class="mode-toggle" id="modeToggle" role="tablist" aria-label="Formalism">
+            <button type="button" class="mode-btn on" data-appmode="PETRI"
+                    title="Petri net — token model: places hold many tokens, gates and capacities apply">Petri net</button>
+            <button type="button" class="mode-btn" data-appmode="FSM"
+                    title="FSM — finite-state machine: exactly one active state at a time">FSM</button>
+        </div>
     </div>
 
     <span class="machine-pill" id="machineNamePill" style="display:none"></span>
@@ -45,18 +52,20 @@
 <div class="intro" id="introScreen">
     <div class="intro-brand">Machine <span>Studio</span></div>
     <div class="intro-tag">
-        Build and simulate state machines with a Petri-net token model.
+        Build and simulate state machines — a <strong>Petri-net</strong> token model
+        or a classic <strong>FSM</strong>, switchable from the header.
         Drag states. Click anything to edit. Press a trigger to advance the simulation.
     </div>
     <div class="intro-rule">
         <span><span class="rule-num">01 —</span> Add states from the Catalog (left)</span>
-        <span><span class="rule-num">02 —</span> Connect them with transitions and logic gates</span>
+        <span><span class="rule-num">02 —</span> Connect them with transitions (and logic gates, in Petri mode)</span>
         <span><span class="rule-num">03 —</span> Add triggers (manual or timed) to fire transitions</span>
         <span><span class="rule-num">04 —</span> Press <strong>Start Simulation</strong> to seed the start state</span>
         <span><span class="rule-num">05 —</span> Watch tokens flow as triggers fire</span>
     </div>
     <div class="intro-btns">
         <button class="btn btn-sec"     onclick="main.triggerUpload()">↑ Load Machine</button>
+        <button class="btn btn-sec"     onclick="main.loadDemo()">▶ View Demo</button>
         <button class="btn btn-primary" onclick="main.newMachine()">+ New Machine</button>
     </div>
 </div>
@@ -94,19 +103,22 @@
 
 <!-- ══════════════════════════════════════════════════════════
      SCRIPTS — strict load order:
-       1.  lib/cytoscape.min.js     — diagram engine
+       1.  lib/cytoscape.min.js      — diagram engine
        2.  lib/dagre.min.js          — auto-layout math
        3.  lib/cytoscape-dagre.js    — cytoscape ↔ dagre adapter
-       4.  config.js                 — global CONFIG
-       5.  fmt.js                    — small utilities
-       6.  modal.js                  — shared modal primitive
-       7.  machine.js                — Machine model + JSON I/O
-       8.  simulator.js              — Petri-net runtime
-       9.  canvas.js                 — Cytoscape integration
-       10. catalog.js                — left-pane buttons
-       11. controls.js               — right-pane triggers + globals
-       12. dialogs.js                — every modal
-       13. main.js                   — orchestrator
+       4.  lib/jszip.min.js          — zip writer (code export)
+       5.  config.js                 — global CONFIG (version, palette…)
+       6.  fmt.js                    — small utilities
+       7.  modal.js                  — shared modal primitive
+       8.  machine.js                — Machine model (FSM + Petri) + JSON I/O
+       9.  simulator.js              — FSM + Petri-net runtime
+       10. canvas.js                 — Cytoscape integration (states, groups)
+       11. catalog.js                — left-pane buttons (mode-aware)
+       12. controls.js               — right-pane triggers + globals
+       13. generators/*              — code-export back-ends
+       14. dialogs.js                — every modal
+       15. demo.js                   — reference machine (fills both models)
+       16. main.js                   — orchestrator
 ═══════════════════════════════════════════════════════════ -->
 <script src="lib/cytoscape.min.js"></script>
 <script src="lib/dagre.min.js"></script>
@@ -123,10 +135,14 @@
 <script src="generators/common/sanitize.js"></script>
 <script src="generators/common/emit.js"></script>
 <script src="generators/common/walker.js"></script>
+<script src="generators/common/gen_tests.js"></script>
+<script src="generators/c_fsm.js"></script>
+<script src="generators/cpp_fsm.js"></script>
 <script src="generators/c_lang.js"></script>
 <script src="generators/cpp_lang.js"></script>
 <script src="generators/index.js"></script>
 <script src="dialogs.js"></script>
+<script src="demo.js"></script>
 <script src="main.js"></script>
 
 <!-- Tiny script: keep the canvas-toolbar mode pill in sync. -->

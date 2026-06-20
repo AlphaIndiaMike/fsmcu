@@ -33,6 +33,11 @@ const cpp_lang = (() => {
     /* ─── public entry ──────────────────────────────────────────── */
 
     function generate(ir, opts) {
+        // FSM formalism → dedicated finite-state-machine generator.
+        if (ir.mode === 'FSM' && typeof cpp_fsm !== 'undefined') {
+            return cpp_fsm.generate(ir, opts);
+        }
+
         if (!SUPPORTED_PATTERNS.includes(opts.pattern)) {
             return { ok: false,
                 error: 'C++ generator does not support pattern "' + opts.pattern + '". ' +
@@ -60,6 +65,7 @@ const cpp_lang = (() => {
                                                           : _emitSourceSwitch(ctx) });
             files.push({ name: 'main.cpp',          content: _emitExampleMain(ctx) });
         }
+        files.push({ name: 'test_state_machine.cpp', content: _emitTests(ctx) });
         files.push({ name: 'Makefile',  content: _emitMakefile(ctx) });
         files.push({ name: 'README.md', content: _emitReadme(ctx) });
 
@@ -69,6 +75,45 @@ const cpp_lang = (() => {
             previewFile: 'state_machine.cpp',
             warnings: ir.warnings || []
         };
+    }
+
+    /* GoogleTest template for the Petri token model. */
+    function _emitTests(ctx) {
+        const ir = ctx.ir;
+        const cpp = ctx.cpp;
+        const start = cpp.states.find(s => s.kind === 'start') || cpp.states[0];
+        const totalInitial = ir.states.reduce((n, s) => n + (s.initialTokens || 0), 0);
+        const startInitial = start ? (start.initialTokens || 0) : 0;
+
+        const cases = [{
+            name: 'InitSeedsTotalTokens',
+            body: 'sm::StateMachine m;\nEXPECT_EQ(' + totalInitial + ', m.total_tokens());'
+        }];
+        if (start) {
+            cases.push({
+                name: 'InitSeedsStartState',
+                body: 'sm::StateMachine m;\nEXPECT_EQ(' + startInitial +
+                      ', m.tokens_in(sm::State::' + start.cppEnum + '));'
+            });
+        }
+        cases.push({
+            name: 'TODO_TokenFlow',
+            body:
+`// Fire triggers and assert the marking. Net change for a plain
+// transition out of state F is (outputYield(F) - inputCost(F)).
+//   sm::StateMachine m;
+//   m.fire(sm::Trigger::Something);
+//   EXPECT_EQ(<expected>, m.tokens_in(sm::State::Dest));
+sm::StateMachine m;
+EXPECT_EQ(${totalInitial}, m.total_tokens());`
+        });
+
+        return gen_tests.gtest({
+            title: ir.name,
+            header: 'state_machine.hpp',
+            suite: 'StateMachineTest',
+            cases
+        });
     }
 
     /* ─── context + name maps ──────────────────────────────────── */
@@ -1347,10 +1392,15 @@ $(TARGET): state_machine.cpp main.cpp state_machine.hpp
 run: $(TARGET)
 \t./$(TARGET)
 
-clean:
-\trm -f $(TARGET)
+# Build + run the GoogleTest suite (install libgtest-dev). Does NOT link main.cpp.
+test: state_machine.cpp test_state_machine.cpp
+\t$(CXX) $(CXXFLAGS) -o run_tests state_machine.cpp test_state_machine.cpp -lgtest -lgtest_main -pthread
+\t./run_tests
 
-.PHONY: run clean
+clean:
+\trm -f $(TARGET) run_tests
+
+.PHONY: run test clean
 `;
     }
 
