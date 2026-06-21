@@ -20,6 +20,11 @@ const main = (() => {
     let machine  = null;
     let mode     = 'edit';     // interaction: 'edit' | 'sim'
     let _unsaved = false;      // model changed since last save / load / new
+    // One-shot: the demo seeds its FSM states without positions, so the
+    // first time the FSM formalism is shown after loading the demo we
+    // auto-arrange it once. Set ONLY on the demo path — never during normal
+    // use — so manually placed nodes are left exactly where the user put them.
+    let _demoFsmNeedsLayout = false;
 
     /* ── init ─────────────────────────────────────────────────────── */
 
@@ -170,11 +175,15 @@ const main = (() => {
         _syncFormalismUI(machine.mode);
         canvas.resetVisuals();
         _refresh();
-        // If the model we just switched to has never been positioned
-        // (e.g. the demo's other formalism, or a freshly emptied model),
-        // arrange it once so nodes don't stack at the origin.
-        const anyPositioned = machine.states.some(s => s.x || s.y);
-        if (!anyPositioned && machine.states.length > 0) {
+        // The demo seeds FSM nodes with no positions; arrange them once on
+        // the first switch to FSM (consumed via the one-shot flag). Outside
+        // the demo we never force a layout here — manually placed nodes stay
+        // where the user put them — except the genuinely-empty/origin case.
+        const demoLayout = (machine.mode === 'FSM') && _demoFsmNeedsLayout;
+        if (demoLayout) _demoFsmNeedsLayout = false;   // consume: once only
+        const unpositioned = machine.states.length > 0 &&
+                             !machine.states.some(s => s.x || s.y);
+        if (demoLayout || unpositioned) {
             setTimeout(() => { canvas.autoLayout(); }, 60);
         } else {
             setTimeout(() => { canvas.fit(); }, 60);
@@ -431,9 +440,13 @@ const main = (() => {
         fmt.resetUid();
         machine = (typeof demo !== 'undefined' && demo.build)
             ? demo.build() : new Machine('', 'PETRI');
-        // The reference seeds nodes at default spots, so force one
-        // auto-arrange on load. A loaded user file keeps its positions.
+        // The demo seeds nodes at default spots (no real positions), so force
+        // one auto-arrange of the active (Petri) model on load. A loaded user
+        // file keeps its positions.
         _activate(true);
+        // The FSM sub-model has no positions either, but it isn't the active
+        // model now — remember to arrange it once, the first time it's shown.
+        _demoFsmNeedsLayout = true;
     }
 
     function exportMachine() {
@@ -448,7 +461,8 @@ const main = (() => {
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement('a');
         a.href     = url;
-        a.download = (machine.name || 'machine').replace(/\s+/g, '_') + '.json';
+        // Single self-contained file, always .fsm (like FAS's project file).
+        a.download = fmt.machineFilename(machine.name);
         a.click();
         URL.revokeObjectURL(url);
         _unsaved = false;   // work has been saved to a file
@@ -475,6 +489,10 @@ const main = (() => {
     }
 
     function _activate(forceLayout) {
+        // Clear the one-shot demo flag on every fresh load / new / demo. The
+        // demo path re-sets it immediately after this returns, so only a demo
+        // load arms the first-FSM-view auto-arrange.
+        _demoFsmNeedsLayout = false;
         _showStudio();
         mode = 'edit';
         _unsaved = false;          // freshly created or loaded

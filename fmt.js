@@ -62,5 +62,16 @@ const fmt = (() => {
         return n;
     }
 
-    return { escHtml, uid, bumpUid, resetUid, clamp, posInt };
+    /* Build the download filename for a machine. Machine Studio saves a
+       single self-contained file — both sub-models, positions, the active
+       formalism — with the `.fsm` extension (the analogue of FAS's single
+       project file). The payload is JSON; the extension is just `.fsm`. */
+    function machineFilename(name) {
+        const base = (String(name == null ? '' : name).trim()
+                        .replace(/\s+/g, '_')
+                        .replace(/[^\w.-]+/g, '')) || 'machine';
+        return base + '.fsm';
+    }
+
+    return { escHtml, uid, bumpUid, resetUid, clamp, posInt, machineFilename };
 })();

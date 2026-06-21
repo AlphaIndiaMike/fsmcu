@@ -756,37 +756,29 @@ const dialogs = (() => {
         ).join('');
 
         const fsm = (m.mode === 'FSM');
-        modal.open('Export — Generate State Machine Code', `
+        modal.open('Export code', `
             ${_errBox()}
             <div class="dlg-msg" style="margin-bottom:0.8rem">
-                Generate compilable code from
+                Generate ${fsm ? 'finite-state machine' : 'Petri-net'} code from
                 <strong>${fmt.escHtml(m.name || 'machine')}</strong>.
-                This machine is in <strong>${fsm ? 'FSM' : 'Petri-net'}</strong> mode —
-                ${fsm
-                    ? 'a classic finite-state machine (transition table) will be generated.'
-                    : 'the Petri-net token engine will be generated.'}
-                Implement the per-state handler bodies in your own file —
-                regeneration won't overwrite them.
             </div>
             ${_field('Language',
                 `<select class="dlg-inp" id="fLang">${langOpts}</select>`)}
-            ${_field('Pattern',
-                `<select class="dlg-inp" id="fPattern"></select>`,
-                'How the firing engine is structured in the emitted code.')}
+            ${_field('Style',
+                `<select class="dlg-inp" id="fPattern"></select>`)}
             ${_field('Trigger API',
                 `<select class="dlg-inp" id="fTrigAPI">
-                    <option value="per-trigger" selected>Both — per-trigger functions (recommended) + sm_fire(id)</option>
-                    <option value="id-only">Integer dispatch only — sm_fire(TRIG_XXX)</option>
-                </select>`,
-                'Both styles are always emitted; this only changes which is featured in the example.')}
+                    <option value="per-trigger" selected>Named functions and integer IDs</option>
+                    <option value="id-only">Integer IDs only</option>
+                </select>`)}
             <div class="dlg-checks">
                 <label class="dlg-check">
                     <input type="checkbox" id="fIncTests" checked>
-                    <span>Include unit tests <em>(${fsm ? 'Unity / GoogleTest' : 'Unity / GoogleTest'} template)</em></span>
+                    <span>Include unit tests</span>
                 </label>
                 <label class="dlg-check">
                     <input type="checkbox" id="fIncImage" checked>
-                    <span>Include diagram image <em>(diagram.png)</em></span>
+                    <span>Include diagram image</span>
                 </label>
             </div>
         `, [
@@ -800,9 +792,9 @@ const dialogs = (() => {
         function repopulatePatterns() {
             const lang = generators.language(langSel.value);
             const patternLabels = {
-                'table':  'Table-driven — transitions table + per-state handler array (recommended)',
-                'switch': 'Switch/case — single dispatch function with switch on trigger',
-                'oop':    'OOP — one class per state (C++ only)'
+                'table':  'Table-driven',
+                'switch': 'Switch/case',
+                'oop':    'Object-oriented'
             };
             patternSel.innerHTML = lang.supportedPatterns
                 .map(p => `<option value="${p}">${patternLabels[p] || p}</option>`)
