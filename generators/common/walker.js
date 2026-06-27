@@ -15,9 +15,10 @@
  *                inputCost, outputYield, bufferCap, initialTokens, index }],
  *     triggers: [{ id, name, kind, fnName, constName, index, period?, oneShot?, initialDelay? }],
  *     transitions: [{ id, from:state, to:state, trigger?:trigger }],
- *     gates: [{ id, type:'AND'|'OR'|'XOR'|'SPLIT',
+ *     gates: [{ id, type:'AND'|'OR'|'XOR'|'SPLIT'|'NOT',
  *               inputs?:[state], to?:state,            // AND/OR/XOR
  *               source?:state, outputs?:[state],       // SPLIT
+ *               guard?:state, to?:state,               // NOT (FSM-only)
  *               trigger?:trigger }],
  *     sanitizeMap: [{ original, generated }],
  *     warnings: [string]
@@ -137,6 +138,20 @@ const walker = (() => {
                     source: inputs[0], outputs,
                     trigger: trg || null
                 });
+            } else if (g.type === 'NOT') {
+                // Inhibitor — FSM-only. Petri has no NOT semantics, so it is
+                // skipped there (the Petri UI never creates one).
+                if (ir.mode !== 'FSM') {
+                    ir.warnings.push('Skipped NOT gate (inhibitor is FSM-only).');
+                    return;
+                }
+                const guard = stateById.get((g.inputs || [])[0]);
+                const to    = stateById.get(g.to);
+                if (!guard || !to) {
+                    ir.warnings.push('Skipped malformed NOT gate.');
+                    return;
+                }
+                ir.gates.push({ id: g.id, type: 'NOT', guard, to, trigger: trg || null });
             } else {
                 if (!['AND', 'OR', 'XOR'].includes(g.type)) {
                     ir.warnings.push('Skipped gate of unknown type: ' + g.type);

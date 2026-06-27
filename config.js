@@ -13,8 +13,8 @@ const CONFIG = {
        badge and stamped into saved JSON + exported code. BUMP THIS ON
        EVERY ITERATION — patch for fixes, minor for new features, major
        for breaking changes. */
-    appVersion:  '1.0.3',
-    releaseDate: '2026-06-20',
+    appVersion:  '1.0.4',
+    releaseDate: '2026-06-26',
 
     /* JSON file-format version. v1 = legacy single flat model (states,
        transitions, gates, triggers at top level). v2 stores TWO fully

@@ -96,8 +96,8 @@ const dialogs = (() => {
         ).join('');
 
         const kindHint = isFsm
-            ? 'Start = ◯ circle, Normal = softbox, End = ▢ square. The run auto-stops when the active state reaches an end state.'
-            : 'Start = ◯ circle, Normal = softbox, End = ▢ square. Sim auto-stops when a token reaches an end state.';
+            ? 'Start = ◯ circle, Normal = rounded box, End = ▢ square. The run auto-stops when the active state reaches an end state.'
+            : 'Start = ◯ circle, Normal = rounded box, End = ▢ square. Sim auto-stops when a token reaches an end state.';
 
         // Petri-only token economics. A finite-state machine has no token
         // costs, yields or buffers, so these fields are hidden in FSM mode.
@@ -322,7 +322,7 @@ const dialogs = (() => {
                 `<select class="dlg-inp" id="fTo">${_stateOptions(m, toId)}</select>`)}
             ${_field('Trigger',
                 `<select class="dlg-inp" id="fTrigger">${_triggerOptions(m, trgId)}</select>`,
-                'The trigger that fires this arrow. Manual triggers fire when you press their button; timer triggers fire on a schedule. Without a trigger, this arrow will never fire.')}
+                'The trigger that fires this transition. Without one, it never fires.')}
         `, _transitionFooter(t));
     }
 
@@ -366,6 +366,7 @@ const dialogs = (() => {
         const type = g ? g.type : (createType || 'AND');
 
         if (type === 'SPLIT') return _openSplitGate(m, g);
+        if (type === 'NOT')   return _openNotGate(m, g);
         return _openLogicGate(m, g, type);
     }
 
@@ -378,25 +379,33 @@ const dialogs = (() => {
             return;
         }
 
+        const isFsm = m.mode === 'FSM';
         const initialInputs = g ? g.inputs.slice() : [];
         const initialTo     = g ? g.to             : '';
         const initialTrg    = g ? g.triggerId      : null;
 
+        const note = isFsm
+            ? (type === 'AND' ? 'Target is reached only when every input state is active; all inputs clear.' :
+               type === 'OR'  ? 'Target is reached when any input is active; the first active input (top of the list) clears.' :
+                                'Target is reached only when exactly one input is active.')
+            : (type === 'AND' ? 'Fires only when every input has enough tokens. All inputs pay; target gains the sum of yields.' :
+               type === 'OR'  ? 'Fires when any input has enough tokens. The first eligible input (top of the list) pays.' :
+                                'Fires only when exactly one input has enough tokens.');
+
+        const trgHint = isFsm
+            ? 'The gate runs on this trigger. List order sets which input clears first for OR.'
+            : 'The gate listens to this trigger. Order in the input list matters for OR (first eligible pays).';
+
         modal.open((g ? 'Edit ' : 'New ') + type + ' gate', `
             ${_errBox()}
-            <div class="dlg-note">
-                <strong>${type}</strong> —
-                ${type === 'AND' ? 'fires only when every input has enough tokens. All inputs pay; target gains the sum of yields.' :
-                  type === 'OR'  ? 'fires when any input has enough tokens. The first eligible input (top of the list) pays.' :
-                                   'fires only when exactly one input has enough tokens.'}
-            </div>
+            <div class="dlg-note"><strong>${type}</strong> — ${note}</div>
             <div class="dlg-label" style="margin-top:0.5rem">Inputs (ordered)</div>
             <div id="gateInputs" class="gate-inputs"></div>
             ${_field('Target state',
                 `<select class="dlg-inp" id="fTo">${_stateOptions(m, initialTo)}</select>`)}
             ${_field('Trigger',
                 `<select class="dlg-inp" id="fTrigger">${_triggerOptions(m, initialTrg)}</select>`,
-                'The gate listens to this trigger. Order in the input list matters for OR (first eligible pays).')}
+                trgHint)}
         `, _logicGateFooter(g, type));
 
         _renderStatePicker(m, initialInputs, 'gateInputs');
@@ -451,28 +460,30 @@ const dialogs = (() => {
             return;
         }
 
+        const isFsm = m.mode === 'FSM';
         const initialSrc  = g ? (g.inputs[0] || '') : (m.states[0] && m.states[0].id);
         const initialOuts = g ? (g.outputs || []).slice() : [];
         const initialTrg  = g ? g.triggerId : null;
 
+        const note = isFsm
+            ? 'One source exposes every destination at once on the same trigger; the source clears.'
+            : 'Atomic fan-out. The source pays once per branch (N × inputCost); each destination gains outputYield. ' +
+              'All-or-nothing: if the source is too low, or any destination is full, nothing moves.';
+        const srcHint = isFsm
+            ? 'The single source that clears when the gate fires.'
+            : 'The single state that pays — once per destination.';
+
         modal.open((g ? 'Edit ' : 'New ') + 'SPLIT gate', `
             ${_errBox()}
-            <div class="dlg-note">
-                <strong>SPLIT</strong> — atomic fan-out. Each destination is a
-                parallel transition firing simultaneously: source loses
-                <em>N&nbsp;×&nbsp;inputCost</em> in total (one cost per branch),
-                each destination gains <em>outputYield</em>. All-or-nothing:
-                if the source has too few tokens for every branch, or any
-                destination is too full to receive, nothing moves.
-            </div>
+            <div class="dlg-note"><strong>SPLIT</strong> — ${note}</div>
             ${_field('Source state',
                 `<select class="dlg-inp" id="fSrc">${_stateOptions(m, initialSrc)}</select>`,
-                'The single state that pays — once per destination.')}
+                srcHint)}
             <div class="dlg-label" style="margin-top:0.5rem">Destinations (ordered)</div>
             <div id="splitOutputs" class="gate-inputs"></div>
             ${_field('Trigger',
                 `<select class="dlg-inp" id="fTrigger">${_triggerOptions(m, initialTrg)}</select>`,
-                'The gate listens to this trigger.')}
+                'The gate runs on this trigger.')}
         `, _splitGateFooter(g));
 
         _renderStatePicker(m, initialOuts, 'splitOutputs', initialSrc);
@@ -520,6 +531,65 @@ const dialogs = (() => {
             api.applyGateCreate({
                 type: 'SPLIT', inputs: [src], outputs: outs, to: null, triggerId: trg
             });
+        }
+        modal.close();
+    }
+
+    /* ── NOT — inhibitor (FSM only): 1 guard → 1 target ───────────── */
+
+    function _openNotGate(m, g) {
+        if (m.states.length < 2) {
+            _alert('Not enough states',
+                'A NOT gate needs a guard state and a target — two states. Add more states first.');
+            return;
+        }
+
+        const initialGuard = g ? (g.inputs[0] || '') : (m.states[0] && m.states[0].id);
+        const initialTo    = g ? g.to : '';
+        const initialTrg   = g ? g.triggerId : null;
+
+        modal.open((g ? 'Edit ' : 'New ') + 'NOT gate', `
+            ${_errBox()}
+            <div class="dlg-note">
+                <strong>NOT</strong> — inhibitor. The target is reached only while
+                the guard state is <em>inactive</em>; the guard is never consumed.
+            </div>
+            ${_field('Guard state',
+                `<select class="dlg-inp" id="fGuard">${_stateOptions(m, initialGuard)}</select>`,
+                'While this state is active, the target stays blocked.')}
+            ${_field('Target state',
+                `<select class="dlg-inp" id="fTo">${_stateOptions(m, initialTo)}</select>`)}
+            ${_field('Trigger',
+                `<select class="dlg-inp" id="fTrigger">${_triggerOptions(m, initialTrg)}</select>`,
+                'The gate runs on this trigger.')}
+        `, _notGateFooter(g));
+    }
+
+    function _notGateFooter(g) {
+        const buttons = [];
+        if (g) buttons.push({
+            label: 'Delete', cls: 'btn-danger',
+            onClick: () => confirm('Delete gate?',
+                'Remove this gate and its arrows.',
+                () => { api.applyGateDelete(g.id); modal.close(); })
+        });
+        buttons.push({ label: 'Cancel', cls: 'btn-sec', onClick: modal.close });
+        buttons.push({ label: g ? 'Save' : 'Create', cls: 'btn-primary',
+                       onClick: () => _saveNotGate(g) });
+        return buttons;
+    }
+
+    function _saveNotGate(existing) {
+        const guard = document.getElementById('fGuard').value;
+        const to    = document.getElementById('fTo').value;
+        const trg   = document.getElementById('fTrigger').value || null;
+        if (!guard)        { _err('Pick a guard state.');        return; }
+        if (!to)           { _err('Pick a target state.');       return; }
+        if (guard === to)  { _err('Guard and target must differ.'); return; }
+        if (existing) {
+            api.applyGateUpdate(existing.id, { inputs: [guard], outputs: [], to, triggerId: trg });
+        } else {
+            api.applyGateCreate({ type: 'NOT', inputs: [guard], outputs: [], to, triggerId: trg });
         }
         modal.close();
     }
@@ -711,15 +781,15 @@ const dialogs = (() => {
             ${_errBox()}
             ${_field('Formalism',
                 `<select class="dlg-inp" id="fMode">
-                    <option value="PETRI">Petri net — token model (places, gates, capacities)</option>
-                    <option value="FSM">FSM — finite-state machine (one active state)</option>
+                    <option value="PETRI">Petri net — tokens, gates, capacities</option>
+                    <option value="FSM">FSM — states, transitions and gates</option>
                 </select>`,
-                'Petri is the full token model; FSM is the simpler single-active-state machine. You can switch formalism any time from the header.')}
+                'Petri uses tokens and capacities; FSM uses active states. Switch any time from the header.')}
             ${_field('Machine name',
                 `<input class="dlg-inp" id="fName" type="text" maxlength="60" placeholder="e.g. Traffic-light controller">`,
-                'Optional — used as the JSON filename when you Save.')}
+                'Optional — used as the file name when you save.')}
             ${typeof onDemo === 'function'
-                ? '<div class="dlg-note">New here? Press <strong>Load demo</strong> for a worked example that fills BOTH a Petri net and an FSM — switch formalism from the header to compare them.</div>'
+                ? '<div class="dlg-note"><strong>Load demo</strong> opens a worked example in both formalisms — switch from the header to compare.</div>'
                 : ''}
         `, footer);
     }

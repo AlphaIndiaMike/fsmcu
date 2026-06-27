@@ -25,9 +25,9 @@
         <span class="logo-ver" id="appVersion" title="Tool version"></span>
         <div class="mode-toggle" id="modeToggle" role="tablist" aria-label="Formalism">
             <button type="button" class="mode-btn on" data-appmode="PETRI"
-                    title="Petri net — token model: places hold many tokens, gates and capacities apply">Petri net</button>
+                    title="Petri net — tokens, gates and capacities">Petri net</button>
             <button type="button" class="mode-btn" data-appmode="FSM"
-                    title="FSM — finite-state machine: exactly one active state at a time">FSM</button>
+                    title="FSM — states, transitions and logic gates">FSM</button>
         </div>
     </div>
 
@@ -52,16 +52,16 @@
 <div class="intro" id="introScreen">
     <div class="intro-brand">Machine <span>Studio</span></div>
     <div class="intro-tag">
-        Build and simulate state machines — a <strong>Petri-net</strong> token model
+        Design and simulate state machines — a <strong>Petri-net</strong> token model
         or a classic <strong>FSM</strong>, switchable from the header.
-        Drag states. Click anything to edit. Press a trigger to advance the simulation.
+        Drag to arrange, click to edit, fire a trigger to advance.
     </div>
     <div class="intro-rule">
-        <span><span class="rule-num">01 —</span> Add states from the Catalog (left)</span>
-        <span><span class="rule-num">02 —</span> Connect them with transitions (and logic gates, in Petri mode)</span>
-        <span><span class="rule-num">03 —</span> Add triggers (manual or timed) to fire transitions</span>
+        <span><span class="rule-num">01 —</span> Add states from the Catalog</span>
+        <span><span class="rule-num">02 —</span> Connect them with transitions and logic gates</span>
+        <span><span class="rule-num">03 —</span> Add triggers (manual or timed) to fire them</span>
         <span><span class="rule-num">04 —</span> Press <strong>Start Simulation</strong> to seed the start state</span>
-        <span><span class="rule-num">05 —</span> Watch tokens flow as triggers fire</span>
+        <span><span class="rule-num">05 —</span> Fire triggers to advance the run</span>
     </div>
     <div class="intro-btns">
         <button class="btn btn-sec"     onclick="main.triggerUpload()">↑ Load Machine</button>

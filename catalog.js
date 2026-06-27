@@ -7,9 +7,10 @@
  * the buttons for the active mode and routes clicks through one
  * callback.
  *
- *   FSM   — states, transitions, triggers, groups. No Petri gates: a
- *           finite-state machine has no AND/OR/XOR/SPLIT token logic.
- *   PETRI — everything above PLUS the four logic gates.
+ *   FSM   — states, transitions, triggers, groups, and logic gates
+ *           (AND / OR / XOR / SPLIT / NOT). Gates block state
+ *           transitions until their inputs are satisfied.
+ *   PETRI — the same, minus NOT (an inhibitor that is FSM-only).
  *
  * Public:
  *   catalog.render(containerId, onPick, mode)
@@ -17,7 +18,7 @@
  *       'state', 'transition',
  *       'trigger-manual', 'trigger-timer',
  *       'group',
- *       'gate-AND', 'gate-OR', 'gate-XOR', 'gate-SPLIT'   (Petri only)
+ *       'gate-AND', 'gate-OR', 'gate-XOR', 'gate-SPLIT', 'gate-NOT'
  *   catalog.setMode(mode)      — re-render for 'FSM' | 'PETRI'
  *   catalog.setEnabled(bool)   — disable in sim mode
  *
@@ -41,21 +42,33 @@ const catalog = (() => {
         ]}
     ];
 
-    /* Petri-only logic gates. */
-    const GATES = { group: 'Logic gates', items: [
-        { kind: 'gate-AND',   icon: '∧',  label: 'AND',   hint: 'Fires when every input has tokens.' },
-        { kind: 'gate-OR',    icon: '∨',  label: 'OR',    hint: 'Fires when any input has tokens.' },
-        { kind: 'gate-XOR',   icon: '⊕',  label: 'XOR',   hint: 'Fires only when exactly one input has tokens.' },
-        { kind: 'gate-SPLIT', icon: '⇉',  label: 'SPLIT', hint: 'One source fans out atomically to many destinations.' }
-    ]};
+    /* Logic gates. Hints are phrased per formalism: tokens in Petri,
+       active states in FSM. NOT is an FSM-only inhibitor. */
+    function _gatesFor(mode) {
+        const fsm = mode === 'FSM';
+        const items = [
+            { kind: 'gate-AND',   icon: '∧',  label: 'AND',
+              hint: fsm ? 'Target is reached only when every input state is active.'
+                        : 'Fires when every input has tokens.' },
+            { kind: 'gate-OR',    icon: '∨',  label: 'OR',
+              hint: fsm ? 'Target is reached when any input state is active.'
+                        : 'Fires when any input has tokens.' },
+            { kind: 'gate-XOR',   icon: '⊕',  label: 'XOR',
+              hint: fsm ? 'Target is reached only when exactly one input state is active.'
+                        : 'Fires only when exactly one input has tokens.' },
+            { kind: 'gate-SPLIT', icon: '⇉',  label: 'SPLIT',
+              hint: fsm ? 'One source exposes several states at once on the same trigger.'
+                        : 'One source fans out atomically to many destinations.' }
+        ];
+        if (fsm) items.push({ kind: 'gate-NOT', icon: '¬', label: 'NOT',
+              hint: 'Inhibitor — target is reachable only while the input state is inactive.' });
+        return { group: 'Logic gates', items };
+    }
 
     /* Build the section list for a mode. Gates sit between Triggers and
        Organize so the layout reads blocks → triggers → gates → organize. */
     function _sectionsFor(mode) {
-        if (mode === 'PETRI') {
-            return [COMMON[0], COMMON[1], GATES, COMMON[2]];
-        }
-        return [COMMON[0], COMMON[1], COMMON[2]];
+        return [COMMON[0], COMMON[1], _gatesFor(mode), COMMON[2]];
     }
 
     let enabled    = true;

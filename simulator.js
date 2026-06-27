@@ -1,29 +1,32 @@
 /**
  * simulator.js
- * Machine Studio [MS] — Petri-net runtime.
+ * Machine Studio [MS] — runtime for both formalisms.
  *
- * Owns the live simulation state for a Machine: token marking,
- * firing logic for transitions and gates, timer scheduling, status
- * colours and auto-stop detection. Nothing in here renders — it
- * notifies via callbacks supplied at init().
+ * Owns the live simulation state for a Machine: token marking (Petri)
+ * or binary active markers (FSM), firing logic for transitions and
+ * gates, timer scheduling, status colours and auto-stop detection.
+ * Nothing in here renders — it notifies via callbacks supplied at
+ * init().
  *
  * Status of a state (drives canvas colours):
  *   'idle'   — 0 tokens                     (grey,   default)
  *   'active' — 0 < tokens < bufferCap       (green,  "system is here")
- *   'full'   — tokens == bufferCap          (red,    blocked-in)
- *   'fail'   — transient: a fire attempt failed because the source
- *              had fewer tokens than its inputCost                 (yellow flash)
+ *   'full'   — tokens == bufferCap          (red,    blocked-in; Petri only)
+ *   'fail'   — transient: a fire attempt failed a precondition (yellow flash)
  *
- * Gate firing:
- *   AND — fires when every input state has >= inputCost AND the
- *         target has room for the sum of their outputYields. All
- *         participating inputs pay; target gains the sum.
- *   OR  — fires once if any input is eligible. The first eligible
- *         input in the gate's input list is the one that pays.
+ * Gate firing (Petri — token availability):
+ *   AND — fires when every input has >= inputCost and the target has
+ *         room for the sum of yields. All inputs pay; target gains it.
+ *   OR  — fires once if any input is eligible (first eligible pays).
  *   XOR — fires only if exactly one input is eligible.
+ *   SPLIT — atomic 1→N fan-out.
  *
- * Auto-stop: as soon as any end state holds at least one token the
- * simulation halts (all timers stopped, manual triggers reject).
+ * Gate firing (FSM — binary markers): the same logic over active/inactive
+ * states, plus NOT (an inhibitor: the target is reachable only while the
+ * input is inactive). See _fireTriggerFSM.
+ *
+ * Auto-stop: as soon as any end state is reached the run halts (timers
+ * stopped, manual triggers reject).
  *
  * Depends on: config.js, machine.js (Machine type)
  */
@@ -71,7 +74,7 @@ const simulator = (() => {
     /* Seed-status line, worded for the active formalism. */
     function _seedMessage(prefix) {
         return (machine && machine.mode === 'FSM')
-            ? prefix + ' — start state is active. Fire a trigger to advance.'
+            ? prefix + ' — start state active. Fire a trigger to advance.'
             : prefix + ' — initial tokens placed. Fire a trigger to advance.';
     }
 
@@ -182,51 +185,198 @@ const simulator = (() => {
     }
 
     /* ── FSM firing ───────────────────────────────────────────────────
-       Classic finite-state-machine semantics: there is exactly ONE
-       active state. Firing a trigger moves the active state along the
-       first transition out of it that carries this trigger. A trigger
-       with no matching transition from the current state flashes the
-       active state (visual "that input does nothing here") and changes
-       nothing. End states auto-stop the run, same as Petri. */
+       Finite-state-machine semantics over BINARY markers: a state is
+       active (1) or inactive (0). Firing a trigger runs one atomic step
+       with the same snapshot/apply discipline as Petri:
+
+         1. Snapshot the active set at trigger-press time.
+         2. Classify every transition/gate on this trigger against the
+            SNAPSHOT, so a marker arriving at a state cannot leave again
+            in the same step.
+         3. Apply the enabled set in creation order against the LIVE set.
+
+       Plain transition: source active → source clears, destination is
+       exposed. Gates block their destination until their inputs satisfy
+       the gate's logic, mirroring Petri:
+         AND   — every input active (all clear, destination exposed).
+         OR    — any input active (the first clears, destination exposed).
+         XOR   — exactly one input active (it clears, destination exposed).
+         SPLIT — source active → source clears, ALL destinations exposed
+                 (one trigger, many states — the one-to-many fan-out).
+         NOT   — inhibitor: destination is exposed only while the input
+                 is INACTIVE; the input is never consumed.
+
+       A normal single-active-state machine (no gates) behaves exactly as
+       before: one marker, moved one transition per trigger. End states
+       auto-stop the run, same as Petri. */
     function _fireTriggerFSM(triggerId) {
-        const cur = _activeState();
-        if (!cur) return;
+        const snap = new Map(marking);
 
-        // Transitions leaving the active state that carry this trigger.
-        const outs = machine.transitions.filter(
-            t => t.from === cur.id && t.triggerId === triggerId
-        );
+        // Phase 1 — classify against the snapshot.
+        const enabled = [];
+        let gateOnTrigger = false;
 
-        if (outs.length === 0) {
-            // This input is not wired out of the current state — give
-            // the user feedback that nothing happened, then bail.
-            _flashFailQuiet(cur.id);
-            _emitStatus();
-            return;
+        machine.transitions.forEach(t => {
+            if (t.triggerId !== triggerId) return;
+            if (_fsmTransitionEnabled(t, snap)) {
+                enabled.push({ kind: 'trans', item: t });
+            }
+        });
+        machine.gates.forEach(g => {
+            if (g.triggerId !== triggerId) return;
+            gateOnTrigger = true;
+            const r = _fsmGateClassify(g, snap);
+            if (r.enabled) enabled.push({ kind: 'gate', item: g, chosen: r.chosen });
+            else r.flashes.forEach(_flashFailQuiet);
+        });
+
+        // Phase 2 — apply against the live marking in creation order.
+        let fired = 0;
+        enabled.forEach(entry => {
+            const ok = entry.kind === 'trans'
+                ? _fsmApplyTransition(entry.item)
+                : _fsmApplyGate(entry.item, entry.chosen);
+            if (ok) fired++;
+        });
+
+        // Dead-trigger feedback: if nothing fired and no gate is wired to
+        // this trigger, flash the active state(s) so the user sees the
+        // input had no effect here. When a gate is involved its own
+        // missing-input flashes already explain why it stayed blocked.
+        if (fired === 0 && !gateOnTrigger) {
+            _activeStates().forEach(s => _flashFailQuiet(s.id));
         }
-
-        // First match wins. A well-formed FSM is deterministic; if the
-        // user wired two transitions on the same trigger out of one
-        // state the machine is non-deterministic, and we resolve the
-        // conflict by creation order (the first transition listed).
-        const dst = machine.stateById(outs[0].to);
-        if (!dst) { _emitStatus(); return; }
-
-        marking.set(cur.id, 0);
-        marking.set(dst.id, 1);
 
         _checkAutoStop();
         _emitStatus();
     }
 
-    /* The single active state in FSM mode (the one holding the marker).
-       Returns null if the marking is empty (shouldn't happen post-seed). */
-    function _activeState() {
-        if (!machine) return null;
-        for (const s of machine.states) {
-            if ((marking.get(s.id) || 0) > 0) return s;
+    /* A plain FSM transition is enabled when its source is active in the
+       snapshot. (A destination that is already active is not a blocker —
+       exposing it again is idempotent.) */
+    function _fsmTransitionEnabled(t, snap) {
+        const src = machine.stateById(t.from);
+        const dst = machine.stateById(t.to);
+        if (!src || !dst) return false;
+        return (snap.get(src.id) || 0) > 0;
+    }
+
+    /* Apply a plain transition: clear the source, expose the destination.
+       Re-checks the LIVE source so two transitions sharing a source in
+       one step don't both spend the single marker. */
+    function _fsmApplyTransition(t) {
+        const src = machine.stateById(t.from);
+        const dst = machine.stateById(t.to);
+        if (!src || !dst) return false;
+        if ((marking.get(src.id) || 0) === 0) { _flashFailQuiet(src.id); return false; }
+        if (src.id !== dst.id) marking.set(src.id, 0);
+        marking.set(dst.id, 1);
+        return true;
+    }
+
+    /* Classify a gate against the snapshot. Returns
+       { enabled, chosen, flashes }; `chosen` is the paying input index
+       for OR/XOR (so apply charges the same one). */
+    function _fsmGateClassify(g, snap) {
+        const active = id => (snap.get(id) || 0) > 0;
+
+        if (g.type === 'SPLIT') {
+            const srcId = g.inputs && g.inputs[0];
+            const src   = srcId && machine.stateById(srcId);
+            const outs  = (g.outputs || []).map(id => machine.stateById(id)).filter(Boolean);
+            if (!src || outs.length === 0) return { enabled: false, flashes: [] };
+            if (!active(src.id)) return { enabled: false, flashes: [src.id] };
+            return { enabled: true, chosen: -1, flashes: [] };
         }
-        return null;
+
+        if (g.type === 'NOT') {
+            const guardId = g.inputs && g.inputs[0];
+            const guard   = guardId && machine.stateById(guardId);
+            const dst     = machine.stateById(g.to);
+            if (!guard || !dst) return { enabled: false, flashes: [] };
+            // Inhibitor: blocked WHILE the guard is active.
+            if (active(guard.id)) return { enabled: false, flashes: [guard.id] };
+            return { enabled: true, chosen: -1, flashes: [] };
+        }
+
+        // AND / OR / XOR — N inputs gate one destination.
+        const dst    = machine.stateById(g.to);
+        const inputs = g.inputs.map(id => machine.stateById(id)).filter(Boolean);
+        if (!dst || inputs.length === 0) return { enabled: false, flashes: [] };
+
+        const eligibleIdx = [];
+        inputs.forEach((s, i) => { if (active(s.id)) eligibleIdx.push(i); });
+
+        if (g.type === 'AND') {
+            if (eligibleIdx.length !== inputs.length) {
+                const flashes = inputs.filter(s => !active(s.id)).map(s => s.id);
+                return { enabled: false, flashes };
+            }
+            return { enabled: true, chosen: -1, flashes: [] };
+        }
+        if (g.type === 'OR') {
+            if (eligibleIdx.length === 0) return { enabled: false, flashes: inputs.map(s => s.id) };
+            return { enabled: true, chosen: eligibleIdx[0], flashes: [] };
+        }
+        if (g.type === 'XOR') {
+            if (eligibleIdx.length === 0) return { enabled: false, flashes: inputs.map(s => s.id) };
+            if (eligibleIdx.length > 1)   return { enabled: false, flashes: eligibleIdx.map(i => inputs[i].id) };
+            return { enabled: true, chosen: eligibleIdx[0], flashes: [] };
+        }
+        return { enabled: false, flashes: [] };
+    }
+
+    /* Apply a gate against the live marking. Re-checks the live set so a
+       conflicting earlier firing in the same step invalidates it safely. */
+    function _fsmApplyGate(g, chosen) {
+        const live = id => (marking.get(id) || 0) > 0;
+
+        if (g.type === 'SPLIT') {
+            const src  = machine.stateById(g.inputs && g.inputs[0]);
+            const outs = (g.outputs || []).map(id => machine.stateById(id)).filter(Boolean);
+            if (!src || outs.length === 0) return false;
+            if (!live(src.id)) { _flashFailQuiet(src.id); return false; }
+            marking.set(src.id, 0);
+            outs.forEach(d => marking.set(d.id, 1));
+            return true;
+        }
+
+        if (g.type === 'NOT') {
+            const guard = machine.stateById(g.inputs && g.inputs[0]);
+            const dst   = machine.stateById(g.to);
+            if (!guard || !dst) return false;
+            if (live(guard.id)) return false;   // guard reappeared this step
+            marking.set(dst.id, 1);
+            return true;
+        }
+
+        const dst = machine.stateById(g.to);
+        if (!dst) return false;
+
+        if (g.type === 'AND') {
+            const inputs = g.inputs.map(id => machine.stateById(id)).filter(Boolean);
+            const short  = inputs.filter(s => !live(s.id));
+            if (short.length) { short.forEach(s => _flashFailQuiet(s.id)); return false; }
+            inputs.forEach(s => marking.set(s.id, 0));
+            marking.set(dst.id, 1);
+            return true;
+        }
+
+        // OR / XOR — the single chosen input pays.
+        const inputs = g.inputs.map(id => machine.stateById(id)).filter(Boolean);
+        const in_    = inputs[chosen];
+        if (!in_) return false;
+        if (!live(in_.id)) { _flashFailQuiet(in_.id); return false; }
+        marking.set(in_.id, 0);
+        marking.set(dst.id, 1);
+        return true;
+    }
+
+    /* Every active state in FSM mode (binary markers — usually one, but
+       a SPLIT/AND can make several active at once). */
+    function _activeStates() {
+        if (!machine) return [];
+        return machine.states.filter(s => (marking.get(s.id) || 0) > 0);
     }
 
     /* ── Classifiers (read-only, against snapshot) ────────────────── */
@@ -526,9 +676,7 @@ const simulator = (() => {
         if (arrived) {
             ended = true;
             _stopAllTimers();
-            _emitMessage(
-                'Simulation ended — token reached end state "' + arrived.name + '".'
-            );
+            _emitMessage('Simulation ended — reached end state "' + arrived.name + '".');
         }
     }
 

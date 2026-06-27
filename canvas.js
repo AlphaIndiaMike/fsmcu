@@ -163,6 +163,15 @@ const canvas = (() => {
                         'letter-spacing':    1
                     }
                 },
+                /* NOT (inhibitor) gate — distinct red border so an
+                   inhibitor reads differently from a flow gate. */
+                {
+                    selector: 'node[type="gate"][gtype="NOT"]',
+                    style: {
+                        'background-color':  '#3a2630',
+                        'border-color':      '#d96258'
+                    }
+                },
                 /* ── Edges ───────────────────────────────────── */
                 {
                     selector: 'edge',
@@ -189,6 +198,19 @@ const canvas = (() => {
                         'line-color':         '#5d6678',
                         'target-arrow-color': '#5d6678',
                         'line-style':         'solid'
+                    }
+                },
+                /* Inhibitor arc (NOT gate input): a hollow circle head and
+                   dashed line, the standard Petri inhibitor notation —
+                   "this guard blocks while it is active". */
+                {
+                    selector: 'edge.gate-inhibitor',
+                    style: {
+                        'line-style':         'dashed',
+                        'line-color':         '#d96258',
+                        'target-arrow-shape': 'circle',
+                        'target-arrow-fill':  'hollow',
+                        'target-arrow-color': '#d96258'
                     }
                 },
                 /* Self-loops: render as a clearly visible arc above the
@@ -316,7 +338,7 @@ const canvas = (() => {
                                      : _gridSpot(machine.states.length + i);
             els.push({
                 group: 'nodes',
-                data: { id: g.id, type: 'gate', label: g.type },
+                data: { id: g.id, type: 'gate', label: g.type, gtype: g.type },
                 position: pos
             });
 
@@ -348,8 +370,10 @@ const canvas = (() => {
                     });
                 });
             } else {
-                // AND / OR / XOR: many input edges, one output edge
-                // (which carries the trigger label).
+                // AND / OR / XOR / NOT: input edge(s) into the gate, one
+                // output edge (carrying the trigger label) to the target.
+                // NOT has a single input — its arc is drawn as an
+                // inhibitor (circle head) to signal "blocks while active".
                 g.inputs.forEach(srcId => {
                     if (!machine.stateById(srcId)) return;
                     els.push({
@@ -359,7 +383,8 @@ const canvas = (() => {
                             source: srcId, target: g.id,
                             type:   'gate-in',
                             label:  ''
-                        }
+                        },
+                        classes: g.type === 'NOT' ? 'gate-inhibitor' : ''
                     });
                 });
                 if (g.to && machine.stateById(g.to)) {

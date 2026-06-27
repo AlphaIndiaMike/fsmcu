@@ -14,10 +14,14 @@
  * A Machine carries TWO fully independent sub-models and the header
  * toggle simply chooses which one is live:
  *
- *   FSM   — a classic finite-state machine. Exactly one active state
- *           at a time; firing a trigger moves the active state along a
- *           transition. States carry only a name + kind; the Petri
- *           token fields are present (defaulted to 1) but unused.
+ *   FSM   — a finite-state machine over binary (active/inactive)
+ *           states. A plain machine has one active state and firing a
+ *           trigger moves it along a transition. Gates (AND/OR/XOR/
+ *           SPLIT/NOT) add Petri-style guards: a SPLIT can expose
+ *           several states at once and an AND join waits on all of its
+ *           inputs, so more than one state can be active. States carry
+ *           only a name + kind; the Petri token fields are present
+ *           (defaulted to 1) but unused.
  *   PETRI — the full Petri-net token model (the original Machine
  *           Studio behaviour, untouched): places hold many tokens,
  *           transitions/gates fire on token availability, capacities
@@ -48,9 +52,15 @@
  *   Legacy v1 files (flat top-level arrays) load as the PETRI sub-model;
  *   see fromJSON.
  *
- * kind  = 'start' | 'normal' | 'end'           (states)
- * type  = 'AND' | 'OR' | 'XOR' | 'SPLIT'       (gates)
- * kind  = 'manual' | 'timer'                   (triggers)
+ * kind  = 'start' | 'normal' | 'end'              (states)
+ * type  = 'AND' | 'OR' | 'XOR' | 'SPLIT' | 'NOT' (gates)
+ * kind  = 'manual' | 'timer'                      (triggers)
+ *
+ * Gates apply to BOTH formalisms. In Petri they gate token flow; in
+ * FSM they gate the single/concurrent active markers (binary): a gate
+ * blocks its target until its inputs satisfy the gate's logic. NOT is
+ * an FSM-only inhibitor — its target is reachable only while its input
+ * is inactive.
  *
  * Depends on: config.js, fmt.js
  */
@@ -286,18 +296,21 @@ class Machine {
         this.transitions = this.transitions.filter(t => t.id !== id);
     }
 
-    /* ── Gate CRUD (Petri only; FSM never creates these) ──────────── */
+    /* ── Gate CRUD ────────────────────────────────────────────────── */
 
     addGate({ type, inputs = [], outputs = [], to = null, triggerId = null, x = 300, y = 300 }) {
-        if (!['AND', 'OR', 'XOR', 'SPLIT'].includes(type)) return null;
+        if (!['AND', 'OR', 'XOR', 'SPLIT', 'NOT'].includes(type)) return null;
         const g = {
             id: fmt.uid('g'),
             type,
             // Topology depends on type:
             //   AND/OR/XOR:  inputs = [N states],  outputs = [],         to = state
-            //     N→1 — many sources fire into one destination.
+            //     N→1 — many sources gate one destination.
             //   SPLIT:       inputs = [1 state],   outputs = [N states], to = null
             //     1→N — one source fans out atomically into N destinations.
+            //   NOT:         inputs = [1 state],   outputs = [],         to = state
+            //     inhibitor — destination is reachable only while the input
+            //     (the guard) is inactive. FSM-only.
             inputs:  inputs.slice(),
             outputs: outputs.slice(),
             to,

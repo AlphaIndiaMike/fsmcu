@@ -37,7 +37,7 @@ const controls = (() => {
         root = document.getElementById(containerId);
         cb   = callbacks || {};
         root.innerHTML = `
-            <div class="ctrl-status" id="ctrlStatus">Edit mode — design your machine.</div>
+            <div class="ctrl-status" id="ctrlStatus">Edit mode.</div>
 
             <div class="ctrl-section">
                 <div class="ctrl-section-hd">Triggers</div>
@@ -165,7 +165,7 @@ const controls = (() => {
         if (!msg) {
             el.textContent = mode === 'sim'
                 ? 'Simulation ready.'
-                : 'Edit mode — design your machine.';
+                : 'Edit mode.';
             el.classList.remove('msg-ended');
         } else {
             el.textContent = msg;

@@ -287,6 +287,7 @@ const main = (() => {
             case 'gate-OR':
             case 'gate-XOR':
             case 'gate-SPLIT':
+            case 'gate-NOT':
                 dialogs.openGateEdit(null, kind.replace('gate-', ''));
                 break;
         }
@@ -372,7 +373,7 @@ const main = (() => {
         if (!machine) return;
         if (!machine.startState()) {
             dialogs.confirm('No start state',
-                'Mark one state as kind = "start" before running the simulation. Open the state and pick "start" as its kind.',
+                'Mark one state as "start" before running the simulation.',
                 () => {});
             return;
         }
